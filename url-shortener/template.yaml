@@ -1,0 +1,121 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Distributed URL Shortener -- API Gateway + Lambda + DynamoDB.
+  Uniqueness enforced via a conditional DynamoDB write (optimistic
+  concurrency), not application-side locking, so it's safe under
+  concurrent invocations across the whole Lambda fleet.
+
+Parameters:
+  KeyLength:
+    Type: Number
+    Default: 7
+    Description: Length of generated short keys (base62 chars).
+
+Globals:
+  Function:
+    Runtime: python3.12
+    Timeout: 10
+    MemorySize: 256
+    Tracing: Active
+    Environment:
+      Variables:
+        URLS_TABLE: !Ref UrlsTable
+        COUNTER_TABLE: !Ref CounterTable
+        KEY_LENGTH: !Ref KeyLength
+        # After the first `sam deploy`, update this to the real invoke URL
+        # (or point it at a custom domain / CloudFront distribution) and
+        # redeploy. Left generic here to avoid a template circular reference.
+        BASE_DOMAIN: !Sub "https://short.${AWS::Region}.example.com"
+
+Resources:
+  UrlsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: url-shortener-urls
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: short_key
+          AttributeType: S
+      KeySchema:
+        - AttributeName: short_key
+          KeyType: HASH
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+
+  CounterTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: url-shortener-counter
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: counter_name
+          AttributeType: S
+      KeySchema:
+        - AttributeName: counter_name
+          KeyType: HASH
+
+  UrlShortenerApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: prod
+      TracingEnabled: true
+
+  CreateUrlFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: handlers/create_url.handler
+      CodeUri: src/
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UrlsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref CounterTable
+      Events:
+        CreateUrl:
+          Type: Api
+          Properties:
+            RestApiId: !Ref UrlShortenerApi
+            Path: /shorten
+            Method: post
+
+  RedirectFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: handlers/redirect_url.handler
+      CodeUri: src/
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UrlsTable
+      Events:
+        Redirect:
+          Type: Api
+          Properties:
+            RestApiId: !Ref UrlShortenerApi
+            Path: /{shortKey}
+            Method: get
+
+  StatsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: handlers/get_stats.handler
+      CodeUri: src/
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UrlsTable
+      Events:
+        Stats:
+          Type: Api
+          Properties:
+            RestApiId: !Ref UrlShortenerApi
+            Path: /{shortKey}/stats
+            Method: get
+
+Outputs:
+  ApiInvokeUrl:
+    Description: Base invoke URL for the deployed API (use this as BASE_DOMAIN)
+    Value: !Sub "https://${UrlShortenerApi}.execute-api.${AWS::Region}.amazonaws.com/prod"
+  UrlsTableName:
+    Value: !Ref UrlsTable
+  CounterTableName:
+    Value: !Ref CounterTable
