@@ -133,15 +133,3 @@ collision-retry and exhaustion behavior in the service layer (via an
 in-memory fake repository), and the DynamoDB repository's conditional-write
 semantics (via `moto`, a mocked DynamoDB — no real AWS account required to
 run these).
-
-## Talking points for an interview
-
-- Why DynamoDB conditional writes instead of a distributed lock — cheaper,
-  simpler, and DynamoDB already gives you the atomicity for free.
-- Why hash+retry over a single global counter by default — no
-  single-writer bottleneck, good for a multi-region write path — and why
-  you might pick the counter anyway (shorter keys sooner, zero collision
-  probability, simpler reasoning about capacity).
-- How you'd extend this: custom aliases, expiring links (DynamoDB TTL),
-  analytics via DynamoDB Streams → Kinesis, a CloudFront cache in front of
-  the redirect endpoint to cut Lambda invocations for hot links.
